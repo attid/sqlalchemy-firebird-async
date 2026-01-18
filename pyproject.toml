@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sqlalchemy-firebird-async"
+version = "0.1.0"
+description = "Asyncio support for Firebird in SQLAlchemy"
+readme = "README.md"
+authors = [
+  { name = "Igor Tolstov", email = "attid0@gmail.com" },
+]
+license = { text = "MIT" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Framework :: AsyncIO",
+    "Topic :: Database",
+]
+dependencies = [
+    "sqlalchemy>=2.0.0",
+    "sqlalchemy-firebird>=2.0.0",
+    "greenlet!=0.4.17",
+]
+
+[project.optional-dependencies]
+fdb = ["fdb>=2.0"]
+firebirdsql = ["firebirdsql>=1.0"]
+all = ["fdb>=2.0", "firebirdsql>=1.0"]
+test = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "testcontainers>=3.7.0",
+]
+
+[project.entry-points."sqlalchemy.dialects"]
+"firebird.fdb_async" = "sqlalchemy_firebird_async.fdb:AsyncFDBDialect"
+"firebird.firebirdsql_async" = "sqlalchemy_firebird_async.firebirdsql:AsyncFirebirdSQLDialect"
+
+[project.urls]
+"Homepage" = "https://github.com/attid/sqlalchemy-firebird-async"
