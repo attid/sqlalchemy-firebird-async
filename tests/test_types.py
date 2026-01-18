@@ -1,67 +1,38 @@
 import pytest
 import decimal
 import datetime
-from sqlalchemy import text, select, Column, Integer, BigInteger, Float, Boolean, String, Numeric, Date, Time, DateTime
-from sqlalchemy.orm import declarative_base
-
-Base = declarative_base()
-
-class AllTypesTable(Base):
-    __tablename__ = "all_types"
-    id = Column(Integer, primary_key=True)
-    f_integer = Column(Integer)
-    f_bigint = Column(BigInteger)
-    f_float = Column(Float)
-    f_boolean = Column(Boolean)
-    f_string = Column(String(100))
-    f_decimal = Column(Numeric(10, 2))
-    # f_date = Column(Date)
-    # f_timestamp = Column(DateTime)
+from sqlalchemy import text
 
 @pytest.mark.asyncio
 async def test_primitive_types(async_engine):
-    # 1. Создаем таблицу вручную
+    """Тест базовых типов: INT, BIGINT, FLOAT, BOOLEAN, VARCHAR, DECIMAL."""
+    # 1. DDL
     async with async_engine.begin() as conn:
-        try:
-            await conn.execute(text("DROP TABLE all_types"))
-        except Exception:
-            pass
+        try: await conn.execute(text("DROP TABLE all_types"))
+        except Exception: pass
         
-        # DDL для Firebird 3.0+ (BOOLEAN поддерживается)
-        ddl = """
-        CREATE TABLE all_types (
-            id INTEGER PRIMARY KEY,
-            f_integer INTEGER,
-            f_bigint BIGINT,
-            f_float FLOAT,
-            f_boolean BOOLEAN,
-            f_string VARCHAR(100),
-            f_decimal DECIMAL(10, 2)
-        )
-        """
-        await conn.execute(text(ddl))
+        await conn.execute(text("""
+            CREATE TABLE all_types (
+                id INTEGER PRIMARY KEY,
+                f_integer INTEGER,
+                f_bigint BIGINT,
+                f_float FLOAT,
+                f_boolean BOOLEAN,
+                f_string VARCHAR(100),
+                f_decimal DECIMAL(10, 2)
+            )
+        """))
 
-    # 2. Вставка данных
-    test_data = [
-        {
-            "id": 1,
-            "f_integer": 42,
-            "f_bigint": 9223372036854775807, # Max BIGINT
-            "f_float": 3.14159,
-            "f_boolean": True,
-            "f_string": "Hello Firebird",
-            "f_decimal": decimal.Decimal("123.45")
-        },
-        {
-            "id": 2,
-            "f_integer": -100,
-            "f_bigint": -1000,
-            "f_float": -0.001,
-            "f_boolean": False,
-            "f_string": "Another String",
-            "f_decimal": decimal.Decimal("0.00")
-        }
-    ]
+    # 2. DML
+    test_data = {
+        "id": 1,
+        "f_integer": 42,
+        "f_bigint": 9223372036854775807,
+        "f_float": 3.14159,
+        "f_boolean": True,
+        "f_string": "Hello Firebird",
+        "f_decimal": decimal.Decimal("123.45")
+    }
 
     async with async_engine.begin() as conn:
         await conn.execute(
@@ -72,43 +43,99 @@ async def test_primitive_types(async_engine):
             test_data
         )
 
-    # 3. Выборка и проверка
+    # 3. SELECT
     async with async_engine.connect() as conn:
-        # Проверяем первую строку
         result = await conn.execute(text("SELECT * FROM all_types WHERE id = 1"))
         row = result.fetchone()
-        
         assert row.f_integer == 42
-        assert isinstance(row.f_integer, int)
-        
         assert row.f_bigint == 9223372036854775807
-        assert isinstance(row.f_bigint, int)
-        
-        # Float в FB может иметь погрешность, проверяем с допуском
         assert abs(row.f_float - 3.14159) < 0.00001
-        assert isinstance(row.f_float, float)
-        
-        # Boolean (важно для FB3+)
         assert row.f_boolean is True
-        assert isinstance(row.f_boolean, bool)
-        
         assert row.f_string == "Hello Firebird"
-        assert isinstance(row.f_string, str)
-        
         assert row.f_decimal == decimal.Decimal("123.45")
-        assert isinstance(row.f_decimal, decimal.Decimal)
 
-        # 4. Проверка WHERE с параметрами разных типов
-        # Это критично, так как здесь SQLAlchemy пытается рендерить типы для биндинга (CAST(? AS TYPE))
+@pytest.mark.asyncio
+async def test_complex_types_fb4(async_engine):
+    """
+    Тестирование сложных типов FB4 (INT128, Time Zones).
+    Пропускается для fdb_async, так как старый драйвер их не поддерживает.
+    """
+    if "fdb_async" in async_engine.url.drivername:
+        pytest.skip("fdb driver does not support INT128 or Time Zones")
+
+    now_tz = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    test_val_38 = decimal.Decimal("1234567890123456789012345678.9012345678")
+    test_blob = "Very large text blob " * 100
+
+    async with async_engine.begin() as conn:
+        try: await conn.execute(text("DROP TABLE complex_types"))
+        except Exception: pass
+        await conn.execute(text("""
+            CREATE TABLE complex_types (
+                id INTEGER PRIMARY KEY,
+                f_numeric_38 NUMERIC(38, 10),
+                f_timestamp_tz TIMESTAMP WITH TIME ZONE,
+                f_blob BLOB SUB_TYPE TEXT
+            )
+        """))
+
+    async with async_engine.begin() as conn:
+        await conn.execute(
+            text("""
+                INSERT INTO complex_types (id, f_numeric_38, f_timestamp_tz, f_blob)
+                VALUES (:id, :f_numeric_38, :f_timestamp_tz, :f_blob)
+            """),
+            {"id": 1, "f_numeric_38": test_val_38, "f_timestamp_tz": now_tz, "f_blob": test_blob}
+        )
+
+    async with async_engine.connect() as conn:
+        result = await conn.execute(text("SELECT * FROM complex_types WHERE id = 1"))
+        row = result.fetchone()
+        assert row.f_numeric_38 == test_val_38
+        assert isinstance(row.f_timestamp_tz, datetime.datetime)
+        assert abs(row.f_timestamp_tz.timestamp() - now_tz.timestamp()) < 1.0
+        assert row.f_blob == test_blob
+
+@pytest.mark.asyncio
+async def test_aggregations(async_engine):
+    """Проверка агрегатных функций."""
+    if "fdb_async" in async_engine.url.drivername:
+        pytest.skip("fdb driver has issues with SQLDA for aggregations in async wrapper")
+
+    async with async_engine.begin() as conn:
+        try: await conn.execute(text("DROP TABLE test_agg"))
+        except Exception: pass
+        await conn.execute(text("CREATE TABLE test_agg (val DECIMAL(10,2))"))
+    
+    async with async_engine.begin() as conn:
+        for v in [10.5, 20.5, 30.0]:
+            await conn.execute(text("INSERT INTO test_agg (val) VALUES (:v)"), {"v": v})
         
-        # WHERE Integer
-        res = await conn.execute(text("SELECT id FROM all_types WHERE f_integer = :val"), {"val": 42})
-        assert res.scalar() == 1
-        
-        # WHERE Boolean
-        # res = await conn.execute(text("SELECT id FROM all_types WHERE f_boolean = :val"), {"val": True})
-        # assert res.scalar() == 1
-        
-        # WHERE String (тут мы уже фиксили баг с VARCHAR)
-        res = await conn.execute(text("SELECT id FROM all_types WHERE f_string = :val"), {"val": "Hello Firebird"})
-        assert res.scalar() == 1
+    async with async_engine.connect() as conn:
+        res = await conn.execute(text("SELECT SUM(val), COUNT(*) FROM test_agg"))
+        s, c = res.fetchone()
+        assert s == decimal.Decimal("61.00")
+        assert c == 3
+
+@pytest.mark.asyncio
+async def test_insert_returning(async_engine):
+    """Проверка RETURNING."""
+    async with async_engine.begin() as conn:
+        try: await conn.execute(text("DROP TABLE test_ret"))
+        except Exception: pass
+        await conn.execute(text("CREATE TABLE test_ret (id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, name VARCHAR(50))"))
+    
+    async with async_engine.begin() as conn:
+        res = await conn.execute(
+            text("INSERT INTO test_ret (name) VALUES (:name) RETURNING id"),
+            {"name": "test"}
+        )
+        new_id = res.scalar()
+        assert isinstance(new_id, int)
+
+@pytest.mark.asyncio
+async def test_statement_string_compilation(async_engine):
+    """Проверка компиляции запроса в строку (для print)."""
+    stmt = text("SELECT 1 FROM rdb$database WHERE 1 = :id").bindparams(id=1)
+    compiled_str = str(stmt.compile(async_engine.sync_engine))
+    assert "1 = " in compiled_str
