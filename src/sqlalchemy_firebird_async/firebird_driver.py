@@ -2,6 +2,9 @@ import asyncio
 from functools import partial
 from sqlalchemy.util.concurrency import await_only
 from greenlet import getcurrent
+from sqlalchemy.pool import AsyncAdaptedQueuePool
+import sqlalchemy_firebird.firebird as firebird_sync
+import firebird.driver as sync_driver
 
 
 class AsyncCursor:
@@ -10,11 +13,9 @@ class AsyncCursor:
         self._loop = loop
 
     def _exec(self, func, *args, **kwargs):
-        # Проверяем, находимся ли мы в контексте greenlet, созданном SQLAlchemy
         if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
             return await_only(self._loop.run_in_executor(None, partial(func, *args, **kwargs)))
         else:
-            # Если нет, вызываем синхронно (например, внутри run_sync)
             return func(*args, **kwargs)
 
     def execute(self, operation, parameters=None):
@@ -82,7 +83,7 @@ class AsyncDBAPI:
         self._sync_dbapi = sync_dbapi
         self.paramstyle = getattr(sync_dbapi, "paramstyle", "qmark")
         self.apilevel = getattr(sync_dbapi, "apilevel", "2.0")
-        self.threadsafety = getattr(sync_dbapi, "threadsafety", 0)
+        self.threadsafety = getattr(sync_dbapi, "threadsafety", 1)
         for attr in (
             "Warning",
             "Error",
@@ -102,34 +103,20 @@ class AsyncDBAPI:
         async_creator_fn = kwargs.pop("async_creator_fn", None)
         loop = asyncio.get_running_loop()
         
-        def _connect():
-            if async_creator_fn is not None:
-                # Здесь мы не можем просто так вызвать await_only, если creator асинхронный
-                # Но fdb синхронный, так что всё ок.
-                # Если передан async_creator, то это для firebirdsql, но мы в fdb.py
-                return async_creator_fn(*args, **kwargs) # вернет корутину? нет, это коллбек
-            else:
-                return self._sync_dbapi.connect(*args, **kwargs)
-
         if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
-            # Если async_creator_fn возвращает корутину, то await_only ее дождется
-            # Но для fdb это синхронный вызов, поэтому run_in_executor
-             sync_conn = await_only(loop.run_in_executor(None, partial(self._sync_dbapi.connect, *args, **kwargs)))
+            sync_conn = await_only(loop.run_in_executor(None, partial(self._sync_dbapi.connect, *args, **kwargs)))
         else:
-             sync_conn = self._sync_dbapi.connect(*args, **kwargs)
+            sync_conn = self._sync_dbapi.connect(*args, **kwargs)
             
         return AsyncConnection(sync_conn, loop)
 
-from sqlalchemy.pool import AsyncAdaptedQueuePool
-import sqlalchemy_firebird.fdb as fdb
-from sqlalchemy_firebird.base import FBTypeCompiler
 
+from sqlalchemy_firebird.base import FBTypeCompiler
 
 class PatchedFBTypeCompiler(FBTypeCompiler):
     def _render_string_type(self, type_, name, length_override=None):
         # Fix for TypeError: unsupported operand type(s) for +: 'int' and 'str'
         if not isinstance(name, str):
-            # Attempt to restore type name from the type object itself
             if hasattr(type_, "__visit_name__"):
                 name = type_.__visit_name__.upper()
             else:
@@ -137,32 +124,21 @@ class PatchedFBTypeCompiler(FBTypeCompiler):
         return super()._render_string_type(type_, name, length_override)
 
 
-class AsyncFDBDialect(fdb.FBDialect_fdb):
-    name = "firebird.fdb_async"
-    driver = "fdb_async"
+class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
+    name = "firebird.firebird_async"
+    driver = "firebird_async"
     is_async = True
     supports_statement_cache = False
     poolclass = AsyncAdaptedQueuePool
-    # Explicitly set type compiler to ensure our patch is used
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.type_compiler_instance = PatchedFBTypeCompiler(self)
         self.type_compiler = self.type_compiler_instance
 
-    def is_disconnect(self, e, connection, cursor):
-        # Handle fdb disconnect errors which store error code in args[1]
-        # Base implementation checks for self.driver == "fdb"
-        if isinstance(e, self.dbapi.DatabaseError):
-             # We are essentially fdb
-             return (e.args[1] in (335546001, 335546003, 335546005)) or \
-                    ("Error writing data to the connection" in str(e))
-        return super().is_disconnect(e, connection, cursor)
-
     @classmethod
     def import_dbapi(cls):
-        import fdb as sync_fdb
-
-        return AsyncDBAPI(sync_fdb)
+        return AsyncDBAPI(sync_driver)
 
     @classmethod
     def dbapi(cls):

@@ -1,10 +1,10 @@
 import asyncio
 import os
+import time
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from testcontainers.core.container import DockerContainer
-from testcontainers.core.waiting_utils import wait_for_logs
 
 # Образ Firebird
 FIREBIRD_IMAGE = "firebirdsql/firebird:4.0.5"
@@ -34,8 +34,8 @@ def firebird_container():
     
     container.start()
     
-    # Даем больше времени на инициализацию БД
-    time.sleep(10) 
+    # Даем время на инициализацию БД (можно заменить на ожидание логов)
+    time.sleep(5) 
     
     try:
         yield container
@@ -53,9 +53,12 @@ def db_url(firebird_container):
         port = firebird_container.get_exposed_port(FIREBIRD_PORT)
     else: host = "localhost"; port = 3050
         
+    # Выбор диалекта через переменную окружения, по умолчанию firebirdsql_async
+    dialect = os.getenv("TEST_DIALECT", "firebirdsql_async")
+    
     # Двойной слэш после порта нужен для абсолютного пути
     db_path = f"//var/lib/firebird/data/{DB_NAME}"
-    url = f"firebird+firebirdsql_async://{DB_USER}:{DB_PASS}@{host}:{port}{db_path}?charset=UTF8"
+    url = f"firebird+[{dialect}]://{DB_USER}:{DB_PASS}@{host}:{port}{db_path}?charset=UTF8".replace("[", "").replace("]", "")
     print(f"\n[DEBUG] Connecting to: {url}")
     return url
 
@@ -64,5 +67,3 @@ async def async_engine(db_url):
     engine = create_async_engine(db_url, echo=False)
     yield engine
     await engine.dispose()
-
-import time

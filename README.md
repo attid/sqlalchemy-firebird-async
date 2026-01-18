@@ -8,17 +8,21 @@
 
 This library provides proper `asyncio` support for Firebird databases in SQLAlchemy 2.0+, allowing you to write fully asynchronous code using modern Python patterns.
 
-It supports two underlying drivers:
-1. **`fdb`** (Recommended) - Runs the official C-based driver in a thread pool. Fast and stable.
-2. **`firebirdsql`** - Pure Python asyncio driver. Currently experimental due to upstream issues.
+It supports three underlying drivers:
+1. **`fdb`** (Legacy) - Runs the official C-based driver in a thread pool. Fast and stable.
+2. **`firebird-driver`** (Modern) - Official driver for Firebird 3+. Also threaded (run_in_executor).
+3. **`firebirdsql`** - Pure Python asyncio driver. Currently experimental due to upstream issues.
 
 ## 📦 Installation
 
 Install using pip:
 
 ```bash
-# Recommended: Install with the FDB driver (Threaded, Fast)
+# Install with the FDB driver (Legacy, Stable)
 pip install "sqlalchemy-firebird-async[fdb]"
+
+# Install with the Firebird Driver (Modern, FB 3.0+)
+pip install "sqlalchemy-firebird-async[firebird-driver]"
 
 # Install with pure python driver (Experimental)
 pip install "sqlalchemy-firebird-async[firebirdsql]"
@@ -28,9 +32,9 @@ pip install "sqlalchemy-firebird-async[firebirdsql]"
 
 ## 🚀 Quick Start
 
-### 1. Using FDB Driver (Recommended)
+### 1. Using FDB Driver (Legacy)
 
-This dialect runs the official `fdb` driver in a thread pool (`run_in_executor`). While not "truly" async at the socket level, it provides the best performance and stability currently available for Firebird in Python.
+This dialect runs the legacy `fdb` driver in a thread pool.
 
 **URL Scheme:** `firebird+fdb_async://`
 
@@ -41,29 +45,25 @@ from sqlalchemy import text
 
 async def main():
     # Format: firebird+fdb_async://user:password@host:port/path/to/db
-    # Note: For Linux, ensure the path is absolute (e.g. //firebird/data/...)
     dsn = "firebird+fdb_async://sysdba:masterkey@localhost:3050//firebird/data/employee.fdb"
     
     engine = create_async_engine(dsn, echo=True)
-
-    async with engine.begin() as conn:
-        result = await conn.execute(text("SELECT rdb$get_context('SYSTEM', 'ENGINE_VERSION') FROM rdb$database"))
-        version = result.scalar()
-        print(f"Firebird Version: {version}")
-
-    # Using AsyncSession
-    async_session = async_sessionmaker(engine, expire_on_commit=False)
-    async with async_session() as session:
-        result = await session.execute(text("SELECT count(*) FROM rdb$relations"))
-        print(f"Total tables: {result.scalar()}")
-
-    await engine.dispose()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    # ... usage is identical for all drivers
 ```
 
-### 2. Using Native Async Driver (firebirdsql)
+### 2. Using Firebird Driver (Modern)
+
+This dialect uses the modern `firebird-driver` package (the official driver for Firebird 3.0+), running in a thread pool. It requires Firebird 3.0 or higher.
+
+**URL Scheme:** `firebird+firebird_async://`
+
+```python
+engine = create_async_engine(
+    "firebird+firebird_async://sysdba:masterkey@localhost:3050//firebird/data/employee.fdb?charset=UTF8"
+)
+```
+
+### 3. Using Native Async Driver (firebirdsql)
 
 **Warning:** The upstream `firebirdsql` driver currently has issues with `asyncio` compatibility (bugs causing crashes or incorrect behavior).
 A patched fork is available at [attid/pyfirebirdsql](https://github.com/attid/pyfirebirdsql.git), which fixes the async logic but currently exhibits significantly lower performance (approx. 4x slower than fdb).
@@ -95,7 +95,8 @@ As seen above, `fdb` in a thread pool is significantly faster for high-load scen
 
 | Driver | Protocol | URL Scheme |
 | :--- | :--- | :--- |
-| **fdb** (Recommended) | TCP/IP | `firebird+fdb_async://user:pass@host:port/db_path` |
+| **fdb** (Legacy) | TCP/IP | `firebird+fdb_async://user:pass@host:port/db_path` |
+| **firebird-driver** (Modern) | TCP/IP | `firebird+firebird_async://user:pass@host:port/db_path` |
 | **firebirdsql** | TCP/IP | `firebird+firebirdsql_async://user:pass@host:port/db_path` |
 
 ## 🤝 Contributing
