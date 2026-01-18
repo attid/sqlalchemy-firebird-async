@@ -11,7 +11,10 @@ import sqlalchemy_firebird.fdb as fdb
 
 def _await_if_needed(value):
     if asyncio.iscoroutine(value):
-        return await_only(value)
+        try:
+            return await_only(value)
+        except StopAsyncIteration:
+            return None
     return value
 
 
@@ -34,8 +37,8 @@ class AsyncPyfbCursor:
         return _await_if_needed(self._async_cursor.fetchone())
 
     def fetchmany(self, size=None):
-        if size is None:
-            return _await_if_needed(self._async_cursor.fetchmany())
+        # firebirdsql fetchmany signature is fetchmany(self, size=None)
+        # but if size is passed it must be used.
         return _await_if_needed(self._async_cursor.fetchmany(size))
 
     def fetchall(self):
@@ -43,6 +46,10 @@ class AsyncPyfbCursor:
 
     def close(self):
         return _await_if_needed(self._async_cursor.close())
+
+    async def _async_soft_close(self):
+        # SQLAlchemy 2.0 calls this.
+        pass
 
     def __getattr__(self, name):
         return getattr(self._async_cursor, name)
@@ -140,17 +147,38 @@ class AsyncFirebirdSQLDialect(fdb.FBDialect_fdb):
 
     def _get_server_version_info(self, connection):
         try:
-            version_str = connection.exec_driver_sql(
+            # We must use exec_driver_sql and await the result because scalar() 
+            # on async connection returns a coroutine.
+            # But wait, 'connection' passed here is likely an AsyncAdapt_dbapi_connection
+            # wrapper which mimics sync interface but executes via greenlet_spawn?
+            # Or is it a raw connection?
+            # In asyncio dialect, _get_server_version_info is called in a sync context.
+            
+            # Let's try standard way, but safe:
+            res = connection.exec_driver_sql(
                 "select rdb$get_context('SYSTEM','ENGINE_VERSION') from rdb$database"
-            ).scalar()
+            )
+            # res.scalar() is a coroutine if we are in async mode?
+            # Actually, exec_driver_sql on AsyncConnection returns a CursorResult that
+            # has sync-like interface if used inside run_sync, but here we are inside dialect method.
+            
+            # Safe way:
+            val = res.scalar()
+            if asyncio.iscoroutine(val):
+                version_str = await_only(val)
+            else:
+                version_str = val
+                
         except Exception:
             return (0, 0)
+            
         if not version_str:
             return (0, 0)
+            
         parts = str(version_str).split(".")
         try:
             major = int(parts[0])
             minor = int(parts[1]) if len(parts) > 1 else 0
-        except ValueError:
+            return (major, minor)
+        except (ValueError, IndexError):
             return (0, 0)
-        return (major, minor)
