@@ -53,8 +53,8 @@ def db_url(firebird_container):
         port = firebird_container.get_exposed_port(FIREBIRD_PORT)
     else: host = "localhost"; port = 3050
         
-    # Выбор диалекта через переменную окружения, по умолчанию firebirdsql_async
-    dialect = os.getenv("TEST_DIALECT", "firebirdsql_async")
+    # Выбор диалекта через переменную окружения, по умолчанию fdb_async
+    dialect = os.getenv("TEST_DIALECT", "fdb_async")
     
     # Двойной слэш после порта нужен для абсолютного пути
     db_path = f"//var/lib/firebird/data/{DB_NAME}"
