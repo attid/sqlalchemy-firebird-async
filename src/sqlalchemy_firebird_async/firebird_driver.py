@@ -73,6 +73,9 @@ class AsyncConnection:
 
     def close(self):
         return self._exec(self._sync_connection.close)
+    
+    def terminate(self):
+        return self._exec(self._sync_connection.close)
 
     def __getattr__(self, name):
         return getattr(self._sync_connection, name)
