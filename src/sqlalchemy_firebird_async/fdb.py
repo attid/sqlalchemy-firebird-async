@@ -126,6 +126,8 @@ class AsyncDBAPI:
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 import sqlalchemy_firebird.fdb as fdb
 from .compiler import PatchedFBTypeCompiler
+from sqlalchemy import String
+from .types import _FBSafeString
 
 
 class AsyncFDBDialect(fdb.FBDialect_fdb):
@@ -134,6 +136,10 @@ class AsyncFDBDialect(fdb.FBDialect_fdb):
     is_async = True
     supports_statement_cache = False
     poolclass = AsyncAdaptedQueuePool
+    
+    colspecs = fdb.FBDialect_fdb.colspecs.copy()
+    colspecs[String] = _FBSafeString
+
     # Explicitly set type compiler to ensure our patch is used
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
