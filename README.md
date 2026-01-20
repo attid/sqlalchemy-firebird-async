@@ -1,8 +1,11 @@
 # sqlalchemy-firebird-async
 
-![Python Version](https://img.shields.io/pypi/pyversions/sqlalchemy-firebird-async)
-![License](https://img.shields.io/pypi/l/sqlalchemy-firebird-async)
-![Status](https://img.shields.io/pypi/status/sqlalchemy-firebird-async)
+[![Python Version](https://img.shields.io/pypi/pyversions/sqlalchemy-firebird-async?style=for-the-badge)](https://pypi.org/project/sqlalchemy-firebird-async/)
+[![License](https://img.shields.io/pypi/l/sqlalchemy-firebird-async?style=for-the-badge)](https://pypi.org/project/sqlalchemy-firebird-async/)
+[![Status](https://img.shields.io/pypi/status/sqlalchemy-firebird-async?style=for-the-badge)](https://pypi.org/project/sqlalchemy-firebird-async/)
+[![PyPI](https://img.shields.io/pypi/v/sqlalchemy-firebird-async?style=for-the-badge)](https://pypi.org/project/sqlalchemy-firebird-async/)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/sqlalchemy-firebird-async?style=for-the-badge)](https://pypistats.org/packages/sqlalchemy-firebird-async)
+
 
 **Asynchronous Firebird dialect for SQLAlchemy.**
 
