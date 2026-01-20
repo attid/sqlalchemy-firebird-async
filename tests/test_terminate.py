@@ -4,50 +4,51 @@ from sqlalchemy import text
 @pytest.mark.asyncio
 async def test_engine_terminate(async_engine):
     """
-    Тест проверяет корректность закрытия соединений при dispose.
-    Это должно вызывать do_terminate -> terminate.
+    Test that connections are closed correctly during dispose.
+    This should call do_terminate -> terminate.
     """
-    # 1. Открываем соединение
+    # 1. Open a connection.
     async with async_engine.connect() as conn:
         await conn.execute(text("SELECT 1 FROM rdb$database"))
-        # Не закрываем явно (хотя контекст менеджер закроет)
+        # Do not close explicitly (the context manager will close it).
         
-    # 2. Форсируем закрытие пула
-    # dispose() вызывает pool.dispose(), который закрывает все соединения.
-    # Если пул был QueuePool (стандартный), он может попытаться вызвать terminate
-    # для проверенных соединений, если они считаются "invalid" или при очистке.
+    # 2. Force pool closure.
+    # dispose() calls pool.dispose(), which closes all connections.
+    # If the pool is QueuePool (default), it may try to call terminate
+    # for checked-out connections if they are considered "invalid" or on cleanup.
     
-    # Чтобы гарантированно вызвать terminate, можно попробовать сымитировать ошибку
-    # или просто положиться на то, что пул вызывает terminate при сбросе.
+    # To guarantee terminate, you can simulate an error
+    # or rely on the pool calling terminate on reset.
     
     await async_engine.dispose()
     
-    # 3. Прямой тест метода terminate на объекте соединения (низкоуровневый)
-    # Нам нужно добраться до raw connection
+    # 3. Direct test of terminate on the connection object (low-level).
+    # We need to reach the raw connection.
     raw_conn = await async_engine.raw_connection()
     try:
-        # В SQLAlchemy 2.0+ raw_connection возвращает адаптер
-        # Нам нужно вызвать метод terminate, который ожидает диалект
+        # In SQLAlchemy 2.0+, raw_connection returns an adapter.
+        # We need to call terminate, which expects the dialect.
         if hasattr(raw_conn, "terminate"):
              raw_conn.terminate()
         else:
-             # Если метода нет, это уже ошибка (AttributeError бы вылетел выше, если бы вызов шел)
-             # Но ошибка из стектрейса пользователя была в do_terminate диалекта
+             # If the method is missing, that is already an error
+             # (AttributeError would have been raised above if it was called).
+             # But the user's stack trace error was in dialect.do_terminate.
              
-             # Эмулируем то, что делает пул:
+             # Emulate what the pool does:
              # dialect.do_terminate(dbapi_connection)
              dialect = async_engine.dialect
-             # raw_conn это AsyncAdapt_dbapi_connection
-             # Внутри него .dbapi_connection это наш AsyncConnection
+             # raw_conn is AsyncAdapt_dbapi_connection.
+             # Inside it, .dbapi_connection is our AsyncConnection.
              
-             # Но terminate вызывается у dbapi_connection.
-             # Попробуем вызвать его у нашего AsyncConnection
+             # But terminate is called on dbapi_connection.
+             # Try to call it on our AsyncConnection.
              real_conn = raw_conn.driver_connection
              
-             # Проверяем наличие метода, так как его отсутствие вызывает ошибку
-             # Если мы его не добавим, тут будет AttributeError (если вызывать)
+             # Check for the method, because its absence raises an error.
+             # If we do not add it, AttributeError would be raised here (if called).
              
-             # Эмуляция вызова из диалекта:
+             # Emulate the call from the dialect:
              try:
                  dialect.do_terminate(real_conn)
              except AttributeError as e:
