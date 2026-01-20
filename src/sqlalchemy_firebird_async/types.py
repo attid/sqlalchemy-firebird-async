@@ -1,5 +1,5 @@
-from sqlalchemy import String
-from sqlalchemy_firebird.types import _FBString
+from sqlalchemy import CHAR, String, VARCHAR
+from sqlalchemy_firebird.types import FBCHAR, FBVARCHAR, _FBString
 
 class _FBSafeString(_FBString):
     def __init__(self, length=None, charset=None, collation=None, **kwargs):
@@ -58,3 +58,13 @@ class _FBSafeString(_FBString):
                 return value
         
         return process
+
+
+class FBCHARCompat(FBCHAR, CHAR):
+    def __init__(self, length=None, charset=None, collation=None):
+        super().__init__(length=length, charset=charset, collation=collation)
+
+
+class FBVARCHARCompat(FBVARCHAR, VARCHAR):
+    def __init__(self, length=None, charset=None, collation=None):
+        super().__init__(length=length, charset=charset, collation=collation)

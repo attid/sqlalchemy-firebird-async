@@ -27,6 +27,14 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
+    def reflects_pk_names(self):
+        return exclusions.open()
+
+    @property
+    def unique_constraints_reflect_as_index(self):
+        return exclusions.open()
+
+    @property
     def unique_constraint_reflection(self):
         return exclusions.open()
 
@@ -73,3 +81,31 @@ class Requirements(SuiteRequirements):
     @property
     def nulls_ordering(self):
         return exclusions.open()
+
+    @property
+    def update_returning(self):
+        return exclusions.closed()
+
+    @property
+    def delete_returning(self):
+        return exclusions.closed()
+
+    @property
+    def parens_in_union_contained_select_w_limit_offset(self):
+        return exclusions.closed()
+
+    @property
+    def parens_in_union_contained_select_wo_limit_offset(self):
+        return exclusions.closed()
+
+    @property
+    def indexes_with_ascdesc(self):
+        return exclusions.closed()
+
+    @property
+    def reflect_indexes_with_ascdesc(self):
+        return exclusions.closed()
+
+    @property
+    def reflect_indexes_with_ascdesc_as_expression(self):
+        return exclusions.closed()

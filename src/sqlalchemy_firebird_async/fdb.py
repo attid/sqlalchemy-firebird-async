@@ -1,21 +1,33 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from sqlalchemy.util.concurrency import await_only
 from greenlet import getcurrent
 
 
 class AsyncCursor:
-    def __init__(self, sync_cursor, loop):
+    def __init__(self, sync_cursor, loop, executor=None):
         self._sync_cursor = sync_cursor
         self._loop = loop
+        self._executor = executor
 
     def _exec(self, func, *args, **kwargs):
         # Check whether we are in a SQLAlchemy-created greenlet context.
-        if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
-            return await_only(self._loop.run_in_executor(None, partial(func, *args, **kwargs)))
-        else:
-            # If not, call synchronously (e.g. inside run_sync).
-            return func(*args, **kwargs)
+        in_greenlet = getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None)
+        if self._executor is not None:
+            if in_greenlet:
+                return await_only(
+                    self._loop.run_in_executor(
+                        self._executor, partial(func, *args, **kwargs)
+                    )
+                )
+            return self._executor.submit(func, *args, **kwargs).result()
+        if in_greenlet:
+            return await_only(
+                self._loop.run_in_executor(None, partial(func, *args, **kwargs))
+            )
+        # If not, call synchronously (e.g. inside run_sync).
+        return func(*args, **kwargs)
 
     def execute(self, operation, parameters=None):
         if parameters is None:
@@ -51,18 +63,33 @@ class AsyncCursor:
 
 
 class AsyncConnection:
-    def __init__(self, sync_connection, loop):
+    def __init__(self, sync_connection, loop, executor=None):
         self._sync_connection = sync_connection
         self._loop = loop
+        self._executor = executor
 
     def _exec(self, func, *args, **kwargs):
-        if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
-            return await_only(self._loop.run_in_executor(None, partial(func, *args, **kwargs)))
-        else:
-            return func(*args, **kwargs)
+        in_greenlet = getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None)
+        if self._executor is not None:
+            if in_greenlet:
+                return await_only(
+                    self._loop.run_in_executor(
+                        self._executor, partial(func, *args, **kwargs)
+                    )
+                )
+            return self._executor.submit(func, *args, **kwargs).result()
+        if in_greenlet:
+            return await_only(
+                self._loop.run_in_executor(None, partial(func, *args, **kwargs))
+            )
+        return func(*args, **kwargs)
 
     def cursor(self):
-        return AsyncCursor(self._sync_connection.cursor(), self._loop)
+        sync_cursor = self._exec(self._sync_connection.cursor)
+        return AsyncCursor(sync_cursor, self._loop, self._executor)
+
+    def begin(self):
+        return self._exec(self._sync_connection.begin)
 
     def commit(self):
         return self._exec(self._sync_connection.commit)
@@ -71,10 +98,15 @@ class AsyncConnection:
         return self._exec(self._sync_connection.rollback)
 
     def close(self):
-        return self._exec(self._sync_connection.close)
+        try:
+            return self._exec(self._sync_connection.close)
+        finally:
+            if self._executor is not None:
+                self._executor.shutdown(wait=False)
+                self._executor = None
     
     def terminate(self):
-        return self._exec(self._sync_connection.close)
+        return self.close()
 
     def __getattr__(self, name):
         return getattr(self._sync_connection, name)
@@ -104,6 +136,7 @@ class AsyncDBAPI:
     def connect(self, *args, **kwargs):
         async_creator_fn = kwargs.pop("async_creator_fn", None)
         loop = asyncio.get_running_loop()
+        executor = None
         
         def _connect():
             if async_creator_fn is not None:
@@ -117,17 +150,41 @@ class AsyncDBAPI:
         if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
             # If async_creator_fn returns a coroutine, await_only will wait for it.
             # But for fdb this is sync, so use run_in_executor.
-             sync_conn = await_only(loop.run_in_executor(None, partial(self._sync_dbapi.connect, *args, **kwargs)))
+             executor = ThreadPoolExecutor(max_workers=1)
+             try:
+                 sync_conn = await_only(loop.run_in_executor(executor, _connect))
+             except Exception:
+                 executor.shutdown(wait=False)
+                 raise
         else:
-             sync_conn = self._sync_dbapi.connect(*args, **kwargs)
+             sync_conn = _connect()
             
-        return AsyncConnection(sync_conn, loop)
+        return AsyncConnection(sync_conn, loop, executor)
 
 from sqlalchemy.pool import AsyncAdaptedQueuePool
+from sqlalchemy_firebird.base import FBExecutionContext
 import sqlalchemy_firebird.fdb as fdb
-from .compiler import PatchedFBTypeCompiler
+from .compiler import PatchedFBCompiler, PatchedFBTypeCompiler
+from .types import FBCHARCompat, FBVARCHARCompat
 from sqlalchemy import String
 from .types import _FBSafeString
+
+
+class AsyncFDBExecutionContext(FBExecutionContext):
+    def post_exec(self):
+        super().post_exec()
+        if self.isddl:
+            # Firebird with fdb requires a new transaction to see DDL changes.
+            dbapi_conn = self._dbapi_connection
+            driver_conn = getattr(dbapi_conn, "driver_connection", None)
+            if driver_conn is None:
+                driver_conn = getattr(dbapi_conn, "dbapi_connection", dbapi_conn)
+            try:
+                self.cursor.close()
+            except Exception:
+                pass
+            driver_conn.commit()
+            driver_conn.begin()
 
 
 class AsyncFDBDialect(fdb.FBDialect_fdb):
@@ -136,6 +193,12 @@ class AsyncFDBDialect(fdb.FBDialect_fdb):
     is_async = True
     supports_statement_cache = False
     poolclass = AsyncAdaptedQueuePool
+    statement_compiler = PatchedFBCompiler
+    execution_ctx_cls = AsyncFDBExecutionContext
+    ischema_names = fdb.FBDialect_fdb.ischema_names.copy()
+    ischema_names["TEXT"] = FBCHARCompat
+    ischema_names["VARYING"] = FBVARCHARCompat
+    ischema_names["CSTRING"] = FBVARCHARCompat
     
     colspecs = fdb.FBDialect_fdb.colspecs.copy()
     colspecs[String] = _FBSafeString

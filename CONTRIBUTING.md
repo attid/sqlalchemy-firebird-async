@@ -37,7 +37,7 @@ These tests run the official SQLAlchemy test suite against our dialect. This is 
 
 ```bash
 # Run Compliance Suite using fdb_async
-PYTHONPATH=. TEST_DIALECT=fdb_async uv run pytest tests/test_compliance.py -p sqlalchemy.testing.plugin.pytestplugin
+PYTHONPATH=. TEST_DIALECT=firebird_async uv run pytest tests/test_compliance.py -p sqlalchemy.testing.plugin.pytestplugin
 ```
 
 ## Supported Drivers

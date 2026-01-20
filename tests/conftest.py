@@ -114,10 +114,11 @@ def pytest_configure(config):
         # test.fdb is created at container start via FIREBIRD_DATABASE.
         # Compliance Suite likes to drop tables.
         
-        # Build the URL for fdb_async (our baseline).
+        # Build the URL for the selected dialect.
         # Important: path inside the container is //var/lib/firebird/data/test.fdb.
         db_path = f"//var/lib/firebird/data/{DB_NAME}"
-        url = f"firebird+fdb_async://{DB_USER}:{DB_PASS}@{host}:{port}{db_path}?charset=UTF8"
+        dialect = os.getenv("TEST_DIALECT", "fdb_async")
+        url = f"firebird+{dialect}://{DB_USER}:{DB_PASS}@{host}:{port}{db_path}?charset=UTF8"
         
         print(f"Compliance Suite URL: {url}")
         
