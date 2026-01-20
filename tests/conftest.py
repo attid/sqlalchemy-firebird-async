@@ -6,27 +6,27 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from testcontainers.core.container import DockerContainer
 
-# Образ Firebird
+# Firebird image
 FIREBIRD_IMAGE = "firebirdsql/firebird:4.0.5"
 FIREBIRD_PORT = 3050
 DB_USER = "testuser"
 DB_PASS = "testpass"
 DB_NAME = "test.fdb"
 
-# Глобальная переменная для хранения контейнера compliance тестов
+# Global variable for the compliance test container
 _compliance_container = None
 
 def pytest_sessionstart(session):
     """
-    Запускает Docker контейнер и настраивает setup.cfg для SQLAlchemy Compliance Suite.
-    Этот хук выполняется до сбора тестов.
+    Starts the Docker container and configures setup.cfg for the SQLAlchemy Compliance Suite.
+    This hook runs before test collection.
     """
-    # Проверяем, есть ли тесты compliance в запуске (чтобы не поднимать докер зря)
-    # Но session.config.args может быть сложным. Проще поднять всегда или проверять наличие флага.
+    # Check whether compliance tests are in this run (so we do not start Docker unnecessarily).
+    # But session.config.args can be complex. It is simpler to always start it or check a flag.
     
     global _compliance_container
     
-    # Если мы уже в CI/CD или есть внешняя база, пропускаем
+    # If we are already in CI/CD or using an external DB, skip.
     if os.getenv("TEST_EXTERNAL_DB"):
         return
 
@@ -42,25 +42,25 @@ def pytest_sessionstart(session):
         container.start()
         _compliance_container = container
         
-        # Ждем старта
+        # Wait for startup.
         time.sleep(5)
         
-        # Получаем параметры
+        # Get parameters.
         host = container.get_container_host_ip()
         port = container.get_exposed_port(FIREBIRD_PORT)
         
-        # Создаем БД для compliance тестов (отдельную от test.fdb, хотя можно и ту же)
-        # test.fdb уже создана при старте контейнера (переменной FIREBIRD_DATABASE).
-        # Но Compliance Suite любит удалять таблицы.
+        # Create a DB for compliance tests (separate from test.fdb, though it could be the same).
+        # test.fdb is created at container start via FIREBIRD_DATABASE.
+        # Compliance Suite likes to drop tables.
         
-        # Формируем URL для fdb_async (наш эталон)
-        # Важно: путь внутри контейнера //var/lib/firebird/data/test.fdb
+        # Build the URL for fdb_async (our baseline).
+        # Important: path inside the container is //var/lib/firebird/data/test.fdb.
         db_path = f"//var/lib/firebird/data/{DB_NAME}"
         url = f"firebird+fdb_async://{DB_USER}:{DB_PASS}@{host}:{port}{db_path}?charset=UTF8"
         
         print(f"Compliance Suite URL: {url}")
         
-        # Генерируем setup.cfg динамически!
+        # Generate setup.cfg dynamically.
         setup_content = f"""
 [db]
 default = {url}
@@ -80,29 +80,29 @@ profile_file = .profiles.txt
 
 def pytest_sessionfinish(session, exitstatus):
     """
-    Останавливает контейнер после завершения всех тестов.
+    Stops the container after all tests finish.
     """
     global _compliance_container
     if _compliance_container:
         print("Stopping Firebird container...")
         _compliance_container.stop()
         _compliance_container = None
-        # Удаляем временный конфиг
+        # Remove the temporary config.
         if os.path.exists("setup.cfg"):
             os.remove("setup.cfg")
 
 @pytest.fixture(scope="session")
 def firebird_container():
     """
-    Фикстура для обычных тестов (test_types, test_basic).
-    Если compliance контейнер уже запущен глобально, используем его!
+    Fixture for regular tests (test_types, test_basic).
+    If the compliance container is already running, reuse it.
     """
     if _compliance_container:
         yield _compliance_container
     elif os.getenv("TEST_EXTERNAL_DB"):
         yield None
     else:
-        # Если compliance не запускался (например, при запуске одного файла), поднимаем свой
+        # If compliance did not run (e.g. when running a single file), start our own.
         container = DockerContainer(FIREBIRD_IMAGE)
         container.with_env("FIREBIRD_USER", DB_USER)
         container.with_env("FIREBIRD_PASSWORD", DB_PASS)
@@ -119,7 +119,7 @@ def firebird_container():
 @pytest.fixture(scope="session")
 def db_url(firebird_container):
     """
-    Формирует URL подключения для обычных тестов.
+    Builds the connection URL for regular tests.
     """
     if firebird_container:
         host = firebird_container.get_container_host_ip()

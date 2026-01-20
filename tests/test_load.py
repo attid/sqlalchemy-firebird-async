@@ -6,14 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-# Простой тяжелый запрос: декартово произведение системных таблиц
+# Simple heavy query: cartesian product of system tables
 BASE_SQL_QUERY = """
 SELECT count(*)
 FROM rdb$fields a, rdb$fields b
 """
 
 def force_async_scheme(dsn: str, scheme: str) -> str:
-    """Подменяет схему драйвера в DSN."""
+    """Replaces the driver scheme in the DSN."""
     if "://" not in dsn:
         return f"firebird+{scheme}://{dsn}"
     _, rest = dsn.split("://", 1)
@@ -24,7 +24,7 @@ def build_raw_query() -> str:
 
 async def run_worker(engine, worker_id: int, repeats: int, raw_query: str):
     results = []
-    # Каждое соединение в отдельном потоке (для fdb)
+    # Each connection runs in its own thread (for fdb).
     async with engine.connect() as connection:
         worker_start = time.perf_counter()
         for i in range(repeats):
@@ -42,31 +42,31 @@ async def run_worker(engine, worker_id: int, repeats: int, raw_query: str):
 @pytest.mark.asyncio
 async def test_load_concurrency(firebird_container):
     """
-    Нагрузочный тест для проверки асинхронности (параллельности) выполнения запросов.
-    Проверяет оба драйвера: fdb_async и firebird_async.
+    Load test to verify async (parallel) query execution.
+    Checks both drivers: fdb_async and firebird_async.
     """
     
-    # Параметры теста
+    # Test parameters.
     THREADS = 4
     REPEATS = 20
     
-    # Определяем параметры подключения на основе фикстуры контейнера
+    # Determine connection parameters based on the container fixture.
     if firebird_container:
         host = firebird_container.get_container_host_ip()
         port = firebird_container.get_exposed_port(3050)
-        # Настройки из conftest.py
+        # Settings from conftest.py.
         db_name = "test.fdb"
         user = "testuser"
         password = "testpass"
     else:
-        # Fallback если контейнер не используется (например, внешний сервер)
+        # Fallback if the container is not used (e.g. external server).
         host = "localhost"
         port = 3050
         db_name = "test.fdb"
         user = "testuser"
         password = "testpass"
 
-    # Абсолютный путь к БД (важно для Firebird в Docker)
+    # Absolute DB path (important for Firebird in Docker).
     db_path = f"//var/lib/firebird/data/{db_name}"
     base_dsn = f"firebird://{user}:{password}@{host}:{port}{db_path}?charset=UTF8"
 
@@ -75,10 +75,10 @@ async def test_load_concurrency(firebird_container):
         ("firebird_async", "firebird-driver") 
     ]
     
-    # Настраиваем executor для асинхронного цикла, чтобы fdb (threaded) мог развернуться
+    # Configure the executor for the async loop so fdb (threaded) can spin up.
     executor = ThreadPoolExecutor(max_workers=THREADS * 2)
     loop = asyncio.get_running_loop()
-    # Сохраняем старый executor, чтобы вернуть (хотя pytest создаст новый loop для след теста)
+    # Save the old executor to restore it (pytest will create a new loop for the next test).
     loop.set_default_executor(executor)
     
     try:
@@ -89,7 +89,7 @@ async def test_load_concurrency(firebird_container):
             engine = create_async_engine(dsn, pool_size=THREADS, max_overflow=10, echo=False)
             
             try:
-                # Прогрев и проверка соединения
+                # Warm up and verify the connection.
                 async with engine.connect() as conn:
                      await conn.execute(text("SELECT 1 FROM rdb$database"))
                 
@@ -106,7 +106,7 @@ async def test_load_concurrency(firebird_container):
                 
                 total_time = time.perf_counter() - start_all
                 
-                # Анализ результатов
+                # Analyze results.
                 all_results = [item for sublist in results_per_worker for item in sublist]
                 durations = [d for d, _ in all_results]
                 sum_durations = sum(durations)
@@ -118,8 +118,8 @@ async def test_load_concurrency(firebird_container):
                     ratio = sum_durations / total_time
                     print(f"Parallel ratio: {ratio:.2f}x (Target: close to {THREADS}x)")
                     
-                    # Простейшая проверка: если ratio < 1.5 при 4 потоках, значит блокируется
-                    # Для GitHub Actions или слабого CPU можно снизить порог, но 2.0+ ожидаемо.
+                    # Basic check: if ratio < 1.5 with 4 threads, it likely blocks.
+                    # For GitHub Actions or weaker CPUs you can lower the threshold, but 2.0+ is expected.
                     if THREADS >= 2:
                         assert ratio > 1.5, f"Low concurrency detected for {label}! Ratio: {ratio:.2f}x"
 

@@ -2,14 +2,14 @@ from sqlalchemy.testing.suite import *
 from sqlalchemy.testing import fixtures
 from sqlalchemy import testing
 
-# Настройка требований
+# Requirement setup
 from tests.requirements import Requirements
 
-# Магия SQLAlchemy testing suite
+# SQLAlchemy testing suite glue
 class FirebirdAsyncTest(fixtures.TestBase):
     __backend__ = True
 
-# Подгружаем тесты (можно по одному для начала)
+# Load tests (can enable one-by-one at first)
 from sqlalchemy.testing.suite import SimpleUpdateDeleteTest as _SimpleUpdateDeleteTest
 from sqlalchemy.testing.suite import ComponentReflectionTest as _ComponentReflectionTest
 from sqlalchemy.testing.suite import OrderByLabelTest as _OrderByLabelTest

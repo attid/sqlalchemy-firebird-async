@@ -5,7 +5,7 @@ from sqlalchemy import text
 
 @pytest.mark.asyncio
 async def test_primitive_types(async_engine):
-    """Тест базовых типов: INT, BIGINT, FLOAT, BOOLEAN, VARCHAR, DECIMAL."""
+    """Test basic types: INT, BIGINT, FLOAT, BOOLEAN, VARCHAR, DECIMAL."""
     # 1. DDL
     async with async_engine.begin() as conn:
         try: await conn.execute(text("DROP TABLE all_types"))
@@ -57,8 +57,8 @@ async def test_primitive_types(async_engine):
 @pytest.mark.asyncio
 async def test_complex_types_fb4(async_engine):
     """
-    Тестирование сложных типов FB4 (INT128, Time Zones).
-    Пропускается для fdb_async, так как старый драйвер их не поддерживает.
+    Test FB4 complex types (INT128, Time Zones).
+    Skipped for fdb_async because the legacy driver does not support them.
     """
     if "fdb_async" in async_engine.url.drivername:
         pytest.skip("fdb driver does not support INT128 or Time Zones")
@@ -98,7 +98,7 @@ async def test_complex_types_fb4(async_engine):
 
 @pytest.mark.asyncio
 async def test_aggregations(async_engine):
-    """Проверка агрегатных функций."""
+    """Check aggregate functions."""
     if "fdb_async" in async_engine.url.drivername:
         pytest.skip("fdb driver has issues with SQLDA for aggregations in async wrapper")
 
@@ -119,7 +119,7 @@ async def test_aggregations(async_engine):
 
 @pytest.mark.asyncio
 async def test_insert_returning(async_engine):
-    """Проверка RETURNING."""
+    """Check RETURNING."""
     async with async_engine.begin() as conn:
         try: await conn.execute(text("DROP TABLE test_ret"))
         except Exception: pass
@@ -135,7 +135,7 @@ async def test_insert_returning(async_engine):
 
 @pytest.mark.asyncio
 async def test_statement_string_compilation(async_engine):
-    """Проверка компиляции запроса в строку (для print)."""
+    """Check statement compilation to string (for print)."""
     stmt = text("SELECT 1 FROM rdb$database WHERE 1 = :id").bindparams(id=1)
     compiled_str = str(stmt.compile(async_engine.sync_engine))
     assert "1 = " in compiled_str

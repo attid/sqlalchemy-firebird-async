@@ -10,11 +10,11 @@ class AsyncCursor:
         self._loop = loop
 
     def _exec(self, func, *args, **kwargs):
-        # Проверяем, находимся ли мы в контексте greenlet, созданном SQLAlchemy
+        # Check whether we are in a SQLAlchemy-created greenlet context.
         if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
             return await_only(self._loop.run_in_executor(None, partial(func, *args, **kwargs)))
         else:
-            # Если нет, вызываем синхронно (например, внутри run_sync)
+            # If not, call synchronously (e.g. inside run_sync).
             return func(*args, **kwargs)
 
     def execute(self, operation, parameters=None):
@@ -107,16 +107,16 @@ class AsyncDBAPI:
         
         def _connect():
             if async_creator_fn is not None:
-                # Здесь мы не можем просто так вызвать await_only, если creator асинхронный
-                # Но fdb синхронный, так что всё ок.
-                # Если передан async_creator, то это для firebirdsql, но мы в fdb.py
-                return async_creator_fn(*args, **kwargs) # вернет корутину? нет, это коллбек
+                # We cannot call await_only directly if the creator is async.
+                # But fdb is synchronous, so it is fine.
+                # If async_creator is provided, it is for firebirdsql, but we are in fdb.py.
+                return async_creator_fn(*args, **kwargs) # Returns a coroutine? No, this is a callback.
             else:
                 return self._sync_dbapi.connect(*args, **kwargs)
 
         if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
-            # Если async_creator_fn возвращает корутину, то await_only ее дождется
-            # Но для fdb это синхронный вызов, поэтому run_in_executor
+            # If async_creator_fn returns a coroutine, await_only will wait for it.
+            # But for fdb this is sync, so use run_in_executor.
              sync_conn = await_only(loop.run_in_executor(None, partial(self._sync_dbapi.connect, *args, **kwargs)))
         else:
              sync_conn = self._sync_dbapi.connect(*args, **kwargs)
