@@ -1,5 +1,6 @@
 import asyncio
 import os
+import socket
 import time
 import pytest
 import pytest_asyncio
@@ -16,13 +17,68 @@ DB_NAME = "test.fdb"
 # Global variable for the compliance test container
 _compliance_container = None
 
-def pytest_sessionstart(session):
+def _normalize_host(host: str) -> str:
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return "127.0.0.1"
+    return host
+
+def _wait_for_port(host: str, port: int, timeout: float = 60.0, interval: float = 0.5) -> None:
+    deadline = time.monotonic() + timeout
+    last_err = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=2):
+                return
+        except OSError as exc:
+            last_err = exc
+            time.sleep(interval)
+    raise RuntimeError(
+        f"Firebird did not start listening on {host}:{port} within {timeout:.1f}s: {last_err}"
+    )
+
+def _wait_for_firebird_ready(
+    host: str,
+    port: int,
+    database: str,
+    user: str,
+    password: str,
+    timeout: float = 60.0,
+    interval: float = 1.0,
+) -> None:
+    try:
+        import fdb
+    except ImportError:
+        return
+
+    deadline = time.monotonic() + timeout
+    last_err = None
+    while time.monotonic() < deadline:
+        try:
+            conn = fdb.connect(
+                host=f"{host}/{port}",
+                database=database,
+                user=user,
+                password=password,
+                charset="UTF8",
+            )
+            conn.close()
+            return
+        except Exception as exc:
+            last_err = exc
+            time.sleep(interval)
+
+    raise RuntimeError(
+        f"Firebird did not accept connections on {host}:{port} within {timeout:.1f}s: {last_err}"
+    )
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
     """
     Starts the Docker container and configures setup.cfg for the SQLAlchemy Compliance Suite.
-    This hook runs before test collection.
+    This hook runs early so the SQLAlchemy testing plugin can read the config.
     """
     # Check whether compliance tests are in this run (so we do not start Docker unnecessarily).
-    # But session.config.args can be complex. It is simpler to always start it or check a flag.
+    # But config.args can be complex. It is simpler to always start it or check a flag.
     
     global _compliance_container
     
@@ -42,12 +98,17 @@ def pytest_sessionstart(session):
         container.start()
         _compliance_container = container
         
-        # Wait for startup.
-        time.sleep(5)
-        
         # Get parameters.
-        host = container.get_container_host_ip()
-        port = container.get_exposed_port(FIREBIRD_PORT)
+        host = _normalize_host(container.get_container_host_ip())
+        port = int(container.get_exposed_port(FIREBIRD_PORT))
+        _wait_for_port(host, port)
+        _wait_for_firebird_ready(
+            host=host,
+            port=port,
+            database=f"/var/lib/firebird/data/{DB_NAME}",
+            user=DB_USER,
+            password=DB_PASS,
+        )
         
         # Create a DB for compliance tests (separate from test.fdb, though it could be the same).
         # test.fdb is created at container start via FIREBIRD_DATABASE.
@@ -110,7 +171,16 @@ def firebird_container():
         container.with_env("FIREBIRD_DATABASE_DEFAULT_CHARSET", "UTF8")
         container.with_bind_ports(FIREBIRD_PORT, None)
         container.start()
-        time.sleep(5)
+        host = _normalize_host(container.get_container_host_ip())
+        port = int(container.get_exposed_port(FIREBIRD_PORT))
+        _wait_for_port(host, port)
+        _wait_for_firebird_ready(
+            host=host,
+            port=port,
+            database=f"/var/lib/firebird/data/{DB_NAME}",
+            user=DB_USER,
+            password=DB_PASS,
+        )
         try:
             yield container
         finally:
@@ -122,7 +192,7 @@ def db_url(firebird_container):
     Builds the connection URL for regular tests.
     """
     if firebird_container:
-        host = firebird_container.get_container_host_ip()
+        host = _normalize_host(firebird_container.get_container_host_ip())
         port = firebird_container.get_exposed_port(FIREBIRD_PORT)
     else: host = "localhost"; port = 3050
         
