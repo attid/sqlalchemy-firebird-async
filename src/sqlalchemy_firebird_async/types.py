@@ -22,12 +22,6 @@ class _FBSafeString(_FBString):
                 # Handle Enum objects (extract value)
                 value = value.value
             
-            if isinstance(value, str):
-                 length = getattr(self, "length", None)
-                 if length:
-                      if len(value) > length:
-                           value = value[:length]
-            
             if super_proc:
                 return super_proc(value)
             return value
