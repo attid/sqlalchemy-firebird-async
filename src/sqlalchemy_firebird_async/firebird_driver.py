@@ -1,4 +1,6 @@
 import asyncio
+import sys
+import os
 from functools import partial
 from sqlalchemy.util.concurrency import await_only
 from greenlet import getcurrent
@@ -6,6 +8,15 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 import sqlalchemy_firebird.firebird as firebird_sync
 import firebird.driver as sync_driver
 
+# Global list to hold references to objects during shutdown to prevent Segfaults
+_zombies = []
+
+def _log(msg):
+    try:
+        with open("/tmp/gemini_debug.log", "a") as f:
+            f.write(f"{os.getpid()}: {msg}\n")
+    except:
+        pass
 
 class AsyncCursor:
     def __init__(self, sync_cursor, loop):
@@ -59,9 +70,37 @@ class AsyncCursor:
             return rows
         return self._exec(self._sync_cursor.fetchall)
 
-    def close(self):
-        return self._exec(self._sync_cursor.close)
-    
+    def close(self, sys=sys, zombies=_zombies):
+        if self._sync_cursor is None:
+            return
+        
+        is_finalizing = False
+        try:
+            if sys is None or sys.is_finalizing():
+                is_finalizing = True
+        except Exception:
+            is_finalizing = True
+
+        if is_finalizing:
+            if zombies is not None:
+                zombies.append(self._sync_cursor)
+            self._sync_cursor = None
+            return
+
+        # Only attempt close if we are in a greenlet context AND loop is running.
+        if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None) and not self._loop.is_closed():
+            try:
+                self._exec(self._sync_cursor.close)
+                self._sync_cursor = None
+                return
+            except Exception:
+                pass
+        
+        # Fallback: zombie
+        if zombies is not None:
+            zombies.append(self._sync_cursor)
+        self._sync_cursor = None
+
     async def _async_soft_close(self):
         pass
     
@@ -82,11 +121,15 @@ class AsyncCursor:
     def __getattr__(self, name):
         return getattr(self._sync_cursor, name)
 
+    def __del__(self):
+        self.close()
+
 
 class AsyncConnection:
     def __init__(self, sync_connection, loop):
         self._sync_connection = sync_connection
         self._loop = loop
+        _log(f"AsyncConnection created: {id(self)} wrapping {id(sync_connection)}")
 
     def _exec(self, func, *args, **kwargs):
         if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
@@ -103,14 +146,56 @@ class AsyncConnection:
     def rollback(self):
         return self._exec(self._sync_connection.rollback)
 
-    def close(self):
-        return self._exec(self._sync_connection.close)
-    
+    def close(self, sys=sys, zombies=_zombies):
+        if self._sync_connection is None:
+            return
+
+        is_finalizing = False
+        try:
+            if sys is None or sys.is_finalizing():
+                is_finalizing = True
+        except Exception:
+            is_finalizing = True
+
+        _log(f"AsyncConnection.close: {id(self)} sync={id(self._sync_connection)} finalizing={is_finalizing}")
+
+        if is_finalizing:
+            if zombies is not None:
+                _log(f"Zombifying connection {id(self._sync_connection)} (finalizing)")
+                zombies.append(self._sync_connection)
+            self._sync_connection = None
+            return
+
+        # Only attempt close if we are in a greenlet context AND loop is running.
+        can_exec = getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None) and not self._loop.is_closed()
+        
+        if can_exec:
+            try:
+                _log(f"Closing connection {id(self._sync_connection)} via executor")
+                self._exec(self._sync_connection.close)
+                self._sync_connection = None
+                return
+            except Exception as e:
+                _log(f"Close failed via executor: {e}")
+                pass
+        else:
+            _log(f"Cannot exec close (loop closed or no greenlet).")
+        
+        # Fallback: zombie
+        if zombies is not None:
+            _log(f"Zombifying connection {id(self._sync_connection)} (fallback)")
+            zombies.append(self._sync_connection)
+        self._sync_connection = None
+
     def terminate(self):
-        return self._exec(self._sync_connection.close)
+        self.close()
 
     def __getattr__(self, name):
         return getattr(self._sync_connection, name)
+
+    def __del__(self):
+        # _log(f"AsyncConnection.__del__: {id(self)}") # Don't log in __del__ if possible or careful
+        self.close()
 
 
 class AsyncDBAPI:
@@ -146,10 +231,10 @@ class AsyncDBAPI:
         return AsyncConnection(sync_conn, loop)
 
 
-from .compiler import PatchedFBCompiler
+from .compiler import PatchedFBCompiler, PatchedFBDDLCompiler
 from .compiler import PatchedFBTypeCompiler
-from sqlalchemy import String
-from .types import FBCHARCompat, FBVARCHARCompat, _FBSafeString
+from sqlalchemy import String, DateTime, Time, TIMESTAMP, VARCHAR, CHAR
+from .types import FBCHARCompat, FBVARCHARCompat, _FBSafeString, FBDateTime, FBTime, FBTimestamp
 
 
 class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
@@ -159,11 +244,17 @@ class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
     supports_statement_cache = False
     poolclass = AsyncAdaptedQueuePool
     statement_compiler = PatchedFBCompiler
+    ddl_compiler = PatchedFBDDLCompiler
     insert_executemany_returning = True
     insert_executemany_returning_sort_by_parameter_order = True
     
     colspecs = firebird_sync.FBDialect_firebird.colspecs.copy()
     colspecs[String] = _FBSafeString
+    colspecs[VARCHAR] = _FBSafeString
+    colspecs[CHAR] = _FBSafeString
+    colspecs[DateTime] = FBDateTime
+    colspecs[Time] = FBTime
+    colspecs[TIMESTAMP] = FBTimestamp
 
     ischema_names = firebird_sync.FBDialect_firebird.ischema_names.copy()
     ischema_names["TEXT"] = FBCHARCompat
@@ -174,12 +265,45 @@ class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
         super().__init__(*args, **kwargs)
         self.type_compiler_instance = PatchedFBTypeCompiler(self)
         self.type_compiler = self.type_compiler_instance
+        self.implicit_returning = True
+        self.postfetch_lastrowid = False
+        self.use_insert_returning = True
+        self.server_version_info = (4, 0, 0)
+        self.supports_identity_columns = True
 
     def initialize(self, connection):
         super().initialize(connection)
+        # Force flags to ensure correct behavior with async driver
+        self.server_version_info = (4, 0, 0) # Assume modern Firebird
+        self.implicit_returning = True
+        self.postfetch_lastrowid = False 
+        self.preexecute_autoincrement_sequences = False 
+        self.supports_identity_columns = True
+        
         reserved = set(self.preparer.reserved_words)
         reserved.update({"asc", "key"})
         self.preparer.reserved_words = reserved
+
+    def is_disconnect(self, e, connection, cursor):
+        return super().is_disconnect(e, connection, cursor)
+
+    def dbapi_exception_translation(self, exception, statement, parameters, context):
+        from sqlalchemy import exc
+        
+        msg = str(exception).lower()
+        if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
+             return exc.IntegrityError(statement, parameters, exception)
+             
+        return super().dbapi_exception_translation(exception, statement, parameters, context)
+
+    def wrap_dbapi_exception(self, e, statement, parameters, cursor, context):
+        from sqlalchemy import exc
+        
+        msg = str(e).lower()
+        if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
+             return exc.IntegrityError(statement, parameters, e)
+             
+        return super().wrap_dbapi_exception(e, statement, parameters, cursor, context)
 
     def _commit_ddl(self, cursor, context):
         if not context or not getattr(context, "isddl", False):
@@ -196,8 +320,16 @@ class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
             conn.commit()
 
     def do_execute(self, cursor, statement, parameters, context=None):
-        super().do_execute(cursor, statement, parameters, context)
-        self._commit_ddl(cursor, context)
+        try:
+            super().do_execute(cursor, statement, parameters, context)
+            self._commit_ddl(cursor, context)
+        except Exception as e:
+            # Force integrity error translation here as it seems _handle_dbapi_exception hook is failing
+            from sqlalchemy import exc
+            msg = str(e).lower()
+            if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
+                 raise exc.IntegrityError(statement, parameters, e) from e
+            raise
 
     def do_execute_no_params(self, cursor, statement, context=None):
         super().do_execute_no_params(cursor, statement, context)

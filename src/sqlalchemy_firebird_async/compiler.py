@@ -1,9 +1,16 @@
 from sqlalchemy_firebird.base import FBCompiler
 from sqlalchemy_firebird.base import FBTypeCompiler
+from sqlalchemy_firebird.base import FBDDLCompiler
 from sqlalchemy.sql import elements
 from sqlalchemy.sql import expression
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.compiler import OPERATORS
+
+class PatchedFBDDLCompiler(FBDDLCompiler):
+    def visit_unique_constraint(self, constraint, **kw):
+        # Firebird can be picky about quoted constraint names with spaces in some contexts
+        # but SQLAlchemy testing uses them.
+        return super().visit_unique_constraint(constraint, **kw)
 
 class PatchedFBTypeCompiler(FBTypeCompiler):
     def _render_string_type(self, type_, name=None, length_override=None, **kwargs):
@@ -51,8 +58,41 @@ class PatchedFBTypeCompiler(FBTypeCompiler):
     def visit_DOUBLE_PRECISION(self, type_, **kw):
         return "DOUBLE PRECISION"
 
+    def visit_FLOAT(self, type_, **kw):
+        return "DOUBLE PRECISION"
+
+    def visit_TIMESTAMP(self, type_, **kw):
+        return "TIMESTAMP(6)"
+
+    def visit_TIME(self, type_, **kw):
+        return "TIME(6)"
+
+    def visit_datetime(self, type_, **kw):
+        return "TIMESTAMP(6)"
+
 
 class PatchedFBCompiler(FBCompiler):
+    def visit_bindparam(self, bindparam, within_columns_clause=False, **kwargs):
+        if within_columns_clause and bindparam.value is not None:
+             # Check for NullType FIRST to avoid CompileError
+             from sqlalchemy.types import NullType
+             if isinstance(bindparam.type, NullType):
+                 return super().visit_bindparam(bindparam, within_columns_clause=within_columns_clause, **kwargs)
+
+             # Firebird needs CAST for parameters in SELECT list
+             # SELECT ? -> SELECT CAST(? AS <type>)
+             db_type = self.dialect.type_compiler.process(bindparam.type)
+             if db_type and "NULL" not in db_type.upper():
+                  # Firebird CAST(.. AS TIMESTAMP(6)) is not valid, use CAST(.. AS TIMESTAMP)
+                  if "TIMESTAMP" in db_type and "(6)" in db_type:
+                       db_type = db_type.replace("(6)", "")
+                  elif "TIME" in db_type and "(6)" in db_type:
+                       db_type = db_type.replace("(6)", "")
+                  
+                  return f"CAST({super().visit_bindparam(bindparam, within_columns_clause=within_columns_clause, **kwargs)} AS {db_type})"
+        
+        return super().visit_bindparam(bindparam, within_columns_clause=within_columns_clause, **kwargs)
+
     def order_by_clause(self, select, **kw):
         if isinstance(select, expression.CompoundSelect):
             return self._compound_order_by_clause(select, **kw)

@@ -164,10 +164,10 @@ class AsyncDBAPI:
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy_firebird.base import FBExecutionContext
 import sqlalchemy_firebird.fdb as fdb
-from .compiler import PatchedFBCompiler, PatchedFBTypeCompiler
+from .compiler import PatchedFBCompiler, PatchedFBDDLCompiler, PatchedFBTypeCompiler
 from .types import FBCHARCompat, FBVARCHARCompat
-from sqlalchemy import String
-from .types import _FBSafeString
+from sqlalchemy import String, DateTime, Time, TIMESTAMP, VARCHAR, CHAR
+from .types import _FBSafeString, FBDateTime, FBTime, FBTimestamp
 
 
 class AsyncFDBExecutionContext(FBExecutionContext):
@@ -194,6 +194,7 @@ class AsyncFDBDialect(fdb.FBDialect_fdb):
     supports_statement_cache = False
     poolclass = AsyncAdaptedQueuePool
     statement_compiler = PatchedFBCompiler
+    ddl_compiler = PatchedFBDDLCompiler
     execution_ctx_cls = AsyncFDBExecutionContext
     ischema_names = fdb.FBDialect_fdb.ischema_names.copy()
     ischema_names["TEXT"] = FBCHARCompat
@@ -202,12 +203,35 @@ class AsyncFDBDialect(fdb.FBDialect_fdb):
     
     colspecs = fdb.FBDialect_fdb.colspecs.copy()
     colspecs[String] = _FBSafeString
+    colspecs[VARCHAR] = _FBSafeString
+    colspecs[CHAR] = _FBSafeString
+    colspecs[DateTime] = FBDateTime
+    colspecs[Time] = FBTime
+    colspecs[TIMESTAMP] = FBTimestamp
 
     # Explicitly set type compiler to ensure our patch is used
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.type_compiler_instance = PatchedFBTypeCompiler(self)
         self.type_compiler = self.type_compiler_instance
+
+    def dbapi_exception_translation(self, exception, statement, parameters, context):
+        from sqlalchemy import exc
+        
+        msg = str(exception).lower()
+        if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
+             return exc.IntegrityError(statement, parameters, exception)
+             
+        return super().dbapi_exception_translation(exception, statement, parameters, context)
+
+    def wrap_dbapi_exception(self, e, statement, parameters, cursor, context):
+        from sqlalchemy import exc
+        
+        msg = str(e).lower()
+        if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
+             return exc.IntegrityError(statement, parameters, e)
+             
+        return super().wrap_dbapi_exception(e, statement, parameters, cursor, context)
 
     def is_disconnect(self, e, connection, cursor):
         # Handle fdb disconnect errors which store error code in args[1]

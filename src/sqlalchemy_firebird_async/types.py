@@ -1,5 +1,6 @@
-from sqlalchemy import CHAR, String, VARCHAR
+from sqlalchemy import CHAR, String, VARCHAR, DateTime, Time, TIMESTAMP
 from sqlalchemy_firebird.types import FBCHAR, FBVARCHAR, _FBString
+import datetime
 
 class _FBSafeString(_FBString):
     def __init__(self, length=None, charset=None, collation=None, **kwargs):
@@ -13,15 +14,19 @@ class _FBSafeString(_FBString):
     def bind_processor(self, dialect):
         super_proc = super().bind_processor(dialect)
         
-        if not self._enums:
-            return super_proc
-
         def process(value):
             if value is None:
                 return None
+            
             if hasattr(value, "value"):
                 # Handle Enum objects (extract value)
                 value = value.value
+            
+            if isinstance(value, str):
+                 length = getattr(self, "length", None)
+                 if length:
+                      if len(value) > length:
+                           value = value[:length]
             
             if super_proc:
                 return super_proc(value)
@@ -68,3 +73,22 @@ class FBCHARCompat(FBCHAR, CHAR):
 class FBVARCHARCompat(FBVARCHAR, VARCHAR):
     def __init__(self, length=None, charset=None, collation=None):
         super().__init__(length=length, charset=charset, collation=collation)
+
+
+def _round_usec(value):
+    return value
+
+
+class FBDateTime(DateTime):
+    def bind_processor(self, dialect):
+        return None
+
+
+class FBTime(Time):
+    def bind_processor(self, dialect):
+        return None
+
+
+class FBTimestamp(TIMESTAMP):
+    def bind_processor(self, dialect):
+        return None
