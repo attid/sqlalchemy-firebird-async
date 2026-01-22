@@ -68,10 +68,10 @@ class AsyncPyfbConnection:
         return AsyncPyfbCursor(self._async_connection.cursor(), self._loop)
 
     def commit(self):
-        _await_if_needed(self._async_connection.commit(), self._loop)
+        return _await_if_needed(self._async_connection.commit(), self._loop)
 
     def rollback(self):
-        _await_if_needed(self._async_connection.rollback(), self._loop)
+        return _await_if_needed(self._async_connection.rollback(), self._loop)
 
     def close(self):
         try:

@@ -35,10 +35,6 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
-    def unique_constraint_reflection(self):
-        return exclusions.open()
-
-    @property
     def datetime_microseconds(self):
         return exclusions.closed()
 
