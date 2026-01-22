@@ -51,6 +51,10 @@ class Requirements(SuiteRequirements):
         return exclusions.closed()
 
     @property
+    def lastrowid(self):
+        return exclusions.closed()
+
+    @property
     def precision_numerics_enormous_scale(self):
         return exclusions.closed()
 
@@ -68,7 +72,7 @@ class Requirements(SuiteRequirements):
 
     @property
     def reflects_generate_rows(self):
-        return exclusions.open()
+        return exclusions.closed()
 
     @property
     def independent_connections(self):
