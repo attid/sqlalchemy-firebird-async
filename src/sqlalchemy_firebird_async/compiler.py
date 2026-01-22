@@ -62,13 +62,13 @@ class PatchedFBTypeCompiler(FBTypeCompiler):
         return "DOUBLE PRECISION"
 
     def visit_TIMESTAMP(self, type_, **kw):
-        return "TIMESTAMP(6)"
+        return "TIMESTAMP"
 
     def visit_TIME(self, type_, **kw):
-        return "TIME(6)"
+        return "TIME"
 
     def visit_datetime(self, type_, **kw):
-        return "TIMESTAMP(6)"
+        return "TIMESTAMP"
 
 
 import re

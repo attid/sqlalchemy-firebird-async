@@ -34,7 +34,14 @@ class AsyncCursor:
                 return self._exec(self._sync_cursor.execute, operation, parameters)
         finally:
             if self._sync_cursor is not None:
-                self._rowcount = self._sync_cursor.rowcount
+                # DBAPI compliance: rowcount should be -1 for SELECT statements
+                # firebird-driver returns 0 until rows are fetched.
+                # SQLAlchemy expects -1 if it's not a DML statement.
+                op_upper = operation.strip().upper()
+                if op_upper.startswith("SELECT") or op_upper.startswith("WITH"):
+                    self._rowcount = -1
+                else:
+                    self._rowcount = self._sync_cursor.rowcount
 
     def executemany(self, operation, seq_of_parameters):
         try:
@@ -193,7 +200,6 @@ class AsyncConnection:
         return getattr(self._sync_connection, name)
 
     def __del__(self):
-        # _log(f"AsyncConnection.__del__: {id(self)}") # Don't log in __del__ if possible or careful
         self.close()
 
 
@@ -219,7 +225,6 @@ class AsyncDBAPI:
                 setattr(self, attr, getattr(sync_dbapi, attr))
 
     def connect(self, *args, **kwargs):
-        async_creator_fn = kwargs.pop("async_creator_fn", None)
         loop = asyncio.get_running_loop()
         
         if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
@@ -359,289 +364,6 @@ class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
                 cursor._rowcount = total_rowcount
             return
         
-        super().do_executemany(cursor, statement, parameters, context)
-    colspecs[DateTime] = FBDateTime
-    colspecs[Time] = FBTime
-    colspecs[TIMESTAMP] = FBTimestamp
-
-    ischema_names = firebird_sync.FBDialect_firebird.ischema_names.copy()
-    ischema_names["TEXT"] = FBCHARCompat
-    ischema_names["VARYING"] = FBVARCHARCompat
-    ischema_names["CSTRING"] = FBVARCHARCompat
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.type_compiler_instance = PatchedFBTypeCompiler(self)
-        self.type_compiler = self.type_compiler_instance
-        self.implicit_returning = True
-        self.postfetch_lastrowid = False
-        self.use_insert_returning = True
-        self.server_version_info = (4, 0, 0)
-        self.supports_identity_columns = True
-
-    def initialize(self, connection):
-        super().initialize(connection)
-        # Force flags to ensure correct behavior with async driver
-        self.server_version_info = (4, 0, 0) # Assume modern Firebird
-        self.implicit_returning = True
-        self.postfetch_lastrowid = False 
-        self.preexecute_autoincrement_sequences = False 
-        self.supports_identity_columns = True
-        
-        reserved = set(self.preparer.reserved_words)
-        reserved.update({"asc", "key"})
-        self.preparer.reserved_words = reserved
-
-    def is_disconnect(self, e, connection, cursor):
-        return super().is_disconnect(e, connection, cursor)
-
-    def dbapi_exception_translation(self, exception, statement, parameters, context):
-        from sqlalchemy import exc
-        
-        msg = str(exception).lower()
-        if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
-             return exc.IntegrityError(statement, parameters, exception)
-             
-        return super().dbapi_exception_translation(exception, statement, parameters, context)
-
-    def wrap_dbapi_exception(self, e, statement, parameters, cursor, context):
-        from sqlalchemy import exc
-        
-        msg = str(e).lower()
-        if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
-             return exc.IntegrityError(statement, parameters, e)
-             
-        return super().wrap_dbapi_exception(e, statement, parameters, cursor, context)
-
-    def _commit_ddl(self, cursor, context):
-        if not context or not getattr(context, "isddl", False):
-            return
-
-        conn = getattr(cursor, "connection", None)
-        if conn is None:
-            return
-
-        if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
-            loop = asyncio.get_running_loop()
-            await_only(loop.run_in_executor(None, conn.commit))
-        else:
-            conn.commit()
-
-    def do_execute(self, cursor, statement, parameters, context=None):
-        try:
-            super().do_execute(cursor, statement, parameters, context)
-            self._commit_ddl(cursor, context)
-        except Exception as e:
-            # Force integrity error translation here as it seems _handle_dbapi_exception hook is failing
-            from sqlalchemy import exc
-            msg = str(e).lower()
-            if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
-                 raise exc.IntegrityError(statement, parameters, e) from e
-            raise
-
-    def do_execute_no_params(self, cursor, statement, context=None):
-        super().do_execute_no_params(cursor, statement, context)
-        self._commit_ddl(cursor, context)
-
-    def do_executemany(self, cursor, statement, parameters, context=None):
-        if (
-            context
-            and getattr(context, "isinsert", False)
-            and getattr(context, "compiled", None) is not None
-            and getattr(context.compiled, "effective_returning", None)
-        ):
-            rows = []
-            description = None
-            total_rowcount = 0
-            for params in parameters:
-                super().do_execute(cursor, statement, params, context)
-                if hasattr(cursor, "rowcount") and cursor.rowcount > 0:
-                    total_rowcount += cursor.rowcount
-                batch_rows = cursor.fetchall()
-                if description is None:
-                    description = cursor.description
-                if batch_rows:
-                    rows.extend(batch_rows)
-            if hasattr(cursor, "_set_buffered_rows"):
-                cursor._set_buffered_rows(rows, description)
-            if hasattr(cursor, "_rowcount"):
-                cursor._rowcount = total_rowcount
-            return
-        
-        super().do_executemany(cursor, statement, parameters, context)
-
-    def terminate(self):
-        self.close()
-
-    def __getattr__(self, name):
-        return getattr(self._sync_connection, name)
-
-    def __del__(self):
-        # _log(f"AsyncConnection.__del__: {id(self)}") # Don't log in __del__ if possible or careful
-        self.close()
-
-
-class AsyncDBAPI:
-    def __init__(self, sync_dbapi):
-        self._sync_dbapi = sync_dbapi
-        self.paramstyle = getattr(sync_dbapi, "paramstyle", "qmark")
-        self.apilevel = getattr(sync_dbapi, "apilevel", "2.0")
-        self.threadsafety = getattr(sync_dbapi, "threadsafety", 1)
-        for attr in (
-            "Warning",
-            "Error",
-            "InterfaceError",
-            "DatabaseError",
-            "DataError",
-            "OperationalError",
-            "IntegrityError",
-            "InternalError",
-            "ProgrammingError",
-            "NotSupportedError",
-        ):
-            if hasattr(sync_dbapi, attr):
-                setattr(self, attr, getattr(sync_dbapi, attr))
-
-    def connect(self, *args, **kwargs):
-        async_creator_fn = kwargs.pop("async_creator_fn", None)
-        loop = asyncio.get_running_loop()
-        
-        if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
-            sync_conn = await_only(loop.run_in_executor(None, partial(self._sync_dbapi.connect, *args, **kwargs)))
-        else:
-            sync_conn = self._sync_dbapi.connect(*args, **kwargs)
-            
-        return AsyncConnection(sync_conn, loop)
-
-
-from .compiler import PatchedFBCompiler, PatchedFBDDLCompiler
-from .compiler import PatchedFBTypeCompiler
-from sqlalchemy import String, DateTime, Time, TIMESTAMP, VARCHAR, CHAR
-from .types import FBCHARCompat, FBVARCHARCompat, _FBSafeString, FBDateTime, FBTime, FBTimestamp
-
-
-class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
-    name = "firebird.firebird_async"
-    driver = "firebird_async"
-    is_async = True
-    supports_statement_cache = False
-    poolclass = AsyncAdaptedQueuePool
-    statement_compiler = PatchedFBCompiler
-    ddl_compiler = PatchedFBDDLCompiler
-    insert_executemany_returning = True
-    insert_executemany_returning_sort_by_parameter_order = True
-    
-    colspecs = firebird_sync.FBDialect_firebird.colspecs.copy()
-    colspecs[String] = _FBSafeString
-    colspecs[VARCHAR] = _FBSafeString
-    colspecs[CHAR] = _FBSafeString
-    colspecs[DateTime] = FBDateTime
-    colspecs[Time] = FBTime
-    colspecs[TIMESTAMP] = FBTimestamp
-
-    ischema_names = firebird_sync.FBDialect_firebird.ischema_names.copy()
-    ischema_names["TEXT"] = FBCHARCompat
-    ischema_names["VARYING"] = FBVARCHARCompat
-    ischema_names["CSTRING"] = FBVARCHARCompat
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.type_compiler_instance = PatchedFBTypeCompiler(self)
-        self.type_compiler = self.type_compiler_instance
-        self.implicit_returning = True
-        self.postfetch_lastrowid = False
-        self.use_insert_returning = True
-        self.server_version_info = (4, 0, 0)
-        self.supports_identity_columns = True
-
-    def initialize(self, connection):
-        super().initialize(connection)
-        # Force flags to ensure correct behavior with async driver
-        self.server_version_info = (4, 0, 0) # Assume modern Firebird
-        self.implicit_returning = True
-        self.postfetch_lastrowid = False 
-        self.preexecute_autoincrement_sequences = False 
-        self.supports_identity_columns = True
-        
-        reserved = set(self.preparer.reserved_words)
-        reserved.update({"asc", "key"})
-        self.preparer.reserved_words = reserved
-
-    def is_disconnect(self, e, connection, cursor):
-        return super().is_disconnect(e, connection, cursor)
-
-    def dbapi_exception_translation(self, exception, statement, parameters, context):
-        from sqlalchemy import exc
-        
-        msg = str(exception).lower()
-        if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
-             return exc.IntegrityError(statement, parameters, exception)
-             
-        return super().dbapi_exception_translation(exception, statement, parameters, context)
-
-    def wrap_dbapi_exception(self, e, statement, parameters, cursor, context):
-        from sqlalchemy import exc
-        
-        msg = str(e).lower()
-        if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
-             return exc.IntegrityError(statement, parameters, e)
-             
-        return super().wrap_dbapi_exception(e, statement, parameters, cursor, context)
-
-    def _commit_ddl(self, cursor, context):
-        if not context or not getattr(context, "isddl", False):
-            return
-
-        conn = getattr(cursor, "connection", None)
-        if conn is None:
-            return
-
-        if getattr(getcurrent(), "__sqlalchemy_greenlet_provider__", None):
-            loop = asyncio.get_running_loop()
-            await_only(loop.run_in_executor(None, conn.commit))
-        else:
-            conn.commit()
-
-    def do_execute(self, cursor, statement, parameters, context=None):
-        try:
-            super().do_execute(cursor, statement, parameters, context)
-            self._commit_ddl(cursor, context)
-        except Exception as e:
-            # Force integrity error translation here as it seems _handle_dbapi_exception hook is failing
-            from sqlalchemy import exc
-            msg = str(e).lower()
-            if "violation" in msg and ("primary" in msg or "unique" in msg or "foreign" in msg or "constraint" in msg):
-                 raise exc.IntegrityError(statement, parameters, e) from e
-            raise
-
-    def do_execute_no_params(self, cursor, statement, context=None):
-        super().do_execute_no_params(cursor, statement, context)
-        self._commit_ddl(cursor, context)
-
-    def do_executemany(self, cursor, statement, parameters, context=None):
-        if (
-            context
-            and getattr(context, "isinsert", False)
-            and getattr(context, "compiled", None) is not None
-            and getattr(context.compiled, "effective_returning", None)
-        ):
-            rows = []
-            description = None
-            total_rowcount = 0
-            for params in parameters:
-                super().do_execute(cursor, statement, params, context)
-                if hasattr(cursor, "rowcount") and cursor.rowcount > 0:
-                    total_rowcount += cursor.rowcount
-                batch_rows = cursor.fetchall()
-                if description is None:
-                    description = cursor.description
-                if batch_rows:
-                    rows.extend(batch_rows)
-            if hasattr(cursor, "_set_buffered_rows"):
-                cursor._set_buffered_rows(rows, description)
-            if hasattr(cursor, "_rowcount"):
-                cursor._rowcount = total_rowcount
-            return
         super().do_executemany(cursor, statement, parameters, context)
 
     @classmethod

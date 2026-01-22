@@ -70,19 +70,27 @@ class FBVARCHARCompat(FBVARCHAR, VARCHAR):
 
 
 def _round_usec(value):
+    if value is None:
+        return None
+    if isinstance(value, (datetime.datetime, datetime.time)):
+        # Firebird stores timestamps with 100 microsecond precision (4 digits)
+        # Truncate microseconds to the nearest 100
+        # 39642 -> 39600
+        usec = (value.microsecond // 100) * 100
+        return value.replace(microsecond=usec)
     return value
 
 
 class FBDateTime(DateTime):
     def bind_processor(self, dialect):
-        return None
+        return _round_usec
 
 
 class FBTime(Time):
     def bind_processor(self, dialect):
-        return None
+        return _round_usec
 
 
 class FBTimestamp(TIMESTAMP):
     def bind_processor(self, dialect):
-        return None
+        return _round_usec

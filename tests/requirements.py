@@ -40,15 +40,15 @@ class Requirements(SuiteRequirements):
 
     @property
     def datetime_microseconds(self):
-        return exclusions.open()
+        return exclusions.closed()
 
     @property
     def timestamp_microseconds(self):
-        return exclusions.open()
+        return exclusions.closed()
 
     @property
     def time_microseconds(self):
-        return exclusions.open()
+        return exclusions.closed()
 
     @property
     def precision_numerics_enormous_scale(self):
