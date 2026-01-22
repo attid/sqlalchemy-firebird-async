@@ -251,8 +251,6 @@ class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
     statement_compiler = PatchedFBCompiler
     ddl_compiler = PatchedFBDDLCompiler
     insert_returning = True
-    implicit_returning = True
-    use_insert_returning = True
     insert_executemany_returning = True
     insert_executemany_returning_sort_by_parameter_order = True
     
@@ -288,9 +286,6 @@ class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
         reserved = set(self.preparer.reserved_words)
         reserved.update({"asc", "key"})
         self.preparer.reserved_words = reserved
-
-    def _check_implicit_returning(self, context, insert_statement):
-        return True
 
     def is_disconnect(self, e, connection, cursor):
         return super().is_disconnect(e, connection, cursor)

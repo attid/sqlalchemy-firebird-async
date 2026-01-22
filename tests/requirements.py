@@ -63,6 +63,13 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
+    def unique_constraint_reflection(self):
+        # Firebird error 336068734 when creating tables with many UNIQUE constraints
+        # This appears to be a Firebird metadata issue with constraint names containing
+        # special characters and reserved words in columns
+        return exclusions.closed()
+
+    @property
     def precision_numerics_enormous_scale(self):
         return exclusions.closed()
 
