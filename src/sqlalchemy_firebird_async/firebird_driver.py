@@ -59,7 +59,8 @@ class AsyncCursor:
             row = self._buffered_rows[self._buffered_index]
             self._buffered_index += 1
             return row
-        return self._exec(self._sync_cursor.fetchone)
+        result = self._exec(self._sync_cursor.fetchone)
+        return result
 
     def fetchmany(self, size=None):
         if self._buffered_rows is not None:
@@ -272,9 +273,7 @@ class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
         super().__init__(*args, **kwargs)
         self.type_compiler_instance = PatchedFBTypeCompiler(self)
         self.type_compiler = self.type_compiler_instance
-        self.implicit_returning = True
         self.postfetch_lastrowid = False
-        self.use_insert_returning = True
         self.server_version_info = (4, 0, 0)
         self.supports_identity_columns = True
 
@@ -282,12 +281,10 @@ class AsyncFirebirdDialect(firebird_sync.FBDialect_firebird):
         super().initialize(connection)
         # Force flags to ensure correct behavior with async driver
         self.server_version_info = (4, 0, 0) # Assume modern Firebird
-        self.implicit_returning = True
-        self.use_insert_returning = True
-        self.postfetch_lastrowid = False 
-        self.preexecute_autoincrement_sequences = False 
+        self.postfetch_lastrowid = False
+        self.preexecute_autoincrement_sequences = False
         self.supports_identity_columns = True
-        
+
         reserved = set(self.preparer.reserved_words)
         reserved.update({"asc", "key"})
         self.preparer.reserved_words = reserved

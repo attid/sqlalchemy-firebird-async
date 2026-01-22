@@ -55,6 +55,14 @@ class Requirements(SuiteRequirements):
         return exclusions.closed()
 
     @property
+    def implements_get_lastrowid(self):
+        return exclusions.closed()
+
+    @property
+    def autoincrement_insert(self):
+        return exclusions.open()
+
+    @property
     def precision_numerics_enormous_scale(self):
         return exclusions.closed()
 
