@@ -1,7 +1,86 @@
 import pytest
 import decimal
 import datetime
-from sqlalchemy import text
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    delete,
+    insert,
+    text,
+    update,
+)
+from sqlalchemy.orm import declarative_base
+from sqlalchemy_firebird_async.firebird_driver import AsyncFirebirdDialect
+
+
+Base = declarative_base()
+
+
+class Transactions(Base):
+    __tablename__ = "t_transactions"
+
+    hash = Column("hash", String(64), primary_key=True)
+    description = Column("description", Text(4000), nullable=False)
+    body = Column("body", Text(12000), nullable=False)
+    add_dt = Column("add_dt", DateTime())
+    updated_dt = Column("updated_dt", DateTime())
+    uuid = Column("uuid", String(32))
+    json = Column("json", Text(), nullable=True)
+    state = Column("state", Integer())
+    stellar_sequence = Column("stellar_sequence", BigInteger())
+    source_account = Column("source_account", String(56))
+    owner_id = Column("owner_id", BigInteger())
+
+
+def test_text_with_length_insert_binds_compile_as_blob_text():
+    stmt = insert(Transactions).values(
+        hash="8a5ae51261b0a8ec44ef027aef5aaf94da5c39179e3c36a86194f49472e1d4b4",
+        description="desc",
+        body="A" * 8880,
+        uuid="u" * 32,
+        json="{}",
+        state=0,
+        stellar_sequence=1,
+        source_account="G" + "A" * 55,
+        owner_id=1,
+    )
+
+    compiled = str(stmt.compile(dialect=AsyncFirebirdDialect()))
+
+    assert "CAST(:description AS BLOB SUB_TYPE TEXT)" in compiled
+    assert "CAST(:body AS BLOB SUB_TYPE TEXT)" in compiled
+    assert "CAST(:json AS BLOB SUB_TYPE TEXT)" in compiled
+    assert "CAST(:description AS VARCHAR(2000))" not in compiled
+    assert "CAST(:body AS VARCHAR(2000))" not in compiled
+
+
+def test_text_with_length_update_binds_compile_as_blob_text():
+    stmt = (
+        update(Transactions)
+        .where(Transactions.hash == "h")
+        .values(description="desc", body="A" * 8880)
+    )
+
+    compiled = str(stmt.compile(dialect=AsyncFirebirdDialect()))
+
+    assert "description=CAST(:description AS BLOB SUB_TYPE TEXT)" in compiled
+    assert "body=CAST(:body AS BLOB SUB_TYPE TEXT)" in compiled
+    assert "description=CAST(:description AS VARCHAR(2000))" not in compiled
+    assert "body=CAST(:body AS VARCHAR(2000))" not in compiled
+
+
+def test_text_with_length_delete_where_bind_does_not_compile_as_varchar():
+    stmt = delete(Transactions).where(Transactions.body == "A" * 8880)
+
+    compiled = str(stmt.compile(dialect=AsyncFirebirdDialect()))
+
+    assert "CAST(:body_1 AS BLOB SUB_TYPE TEXT)" in compiled
+    assert "CAST(:body_1 AS VARCHAR(2000))" not in compiled
+
 
 @pytest.mark.asyncio
 async def test_primitive_types(async_engine):
