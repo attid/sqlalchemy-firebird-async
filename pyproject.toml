@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sqlalchemy-firebird-async"
-version = "0.2.4"
+version = "0.2.5"
 description = "Asyncio support for Firebird in SQLAlchemy"
 readme = "README.md"
 authors = [
@@ -20,7 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "sqlalchemy>=2.0.0",
-    "sqlalchemy-firebird>=2.0.0,<2.2.0",
+    "sqlalchemy-firebird>=2.0.0",
     "greenlet!=0.4.17",
 ]
 

@@ -31,13 +31,17 @@ class PatchedFBTypeCompiler(FBTypeCompiler):
                 text += f" COLLATE {collation}"
             return text
 
-        # Fix for TypeError: unsupported operand type(s) for +: 'int' and 'str'
         if not isinstance(name, str):
-            # Attempt to restore type name from the type object itself
-            if hasattr(type_, "__visit_name__"):
-                name = type_.__visit_name__.upper()
-            else:
-                name = "VARCHAR"
+            name = getattr(type_, "__visit_name__", "VARCHAR").upper()
+
+        if hasattr(super(), "_render_firebird_string_type"):
+            return super()._render_firebird_string_type(
+                name,
+                length_override,
+                getattr(type_, "collation", None),
+                getattr(type_, "charset", None),
+            )
+
         return super()._render_string_type(type_, name, length_override)
 
     def visit_VARCHAR(self, type_, **kw):

@@ -6,8 +6,8 @@ from greenlet import getcurrent
 
 import firebirdsql
 import firebirdsql.aio as aio
-import sqlalchemy_firebird.fdb as fdb
-from .compiler import PatchedFBTypeCompiler
+from sqlalchemy_firebird.base import FBDialect
+from .compiler import PatchedFBCompiler, PatchedFBDDLCompiler, PatchedFBTypeCompiler
 from sqlalchemy import String
 from .types import _FBSafeString
 
@@ -134,14 +134,16 @@ class AsyncPyfbDBAPI:
         return firebirdsql.Binary(value)
 
 
-class AsyncFirebirdSQLDialect(fdb.FBDialect_fdb):
+class AsyncFirebirdSQLDialect(FBDialect):
     name = "firebird.firebirdsql_async"
     driver = "firebirdsql_async"
     is_async = True
     supports_statement_cache = False
     poolclass = AsyncAdaptedQueuePool
+    statement_compiler = PatchedFBCompiler
+    ddl_compiler = PatchedFBDDLCompiler
     
-    colspecs = fdb.FBDialect_fdb.colspecs.copy()
+    colspecs = FBDialect.colspecs.copy()
     colspecs[String] = _FBSafeString
     
     def __init__(self, *args, **kwargs):

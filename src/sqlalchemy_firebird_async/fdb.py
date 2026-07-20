@@ -1,6 +1,8 @@
 import asyncio
+from math import modf
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from sqlalchemy import util
 from sqlalchemy.util.concurrency import await_only
 from greenlet import getcurrent
 
@@ -162,8 +164,8 @@ class AsyncDBAPI:
         return AsyncConnection(sync_conn, loop, executor)
 
 from sqlalchemy.pool import AsyncAdaptedQueuePool
+from sqlalchemy_firebird.base import FBDialect
 from sqlalchemy_firebird.base import FBExecutionContext
-import sqlalchemy_firebird.fdb as fdb
 from .compiler import PatchedFBCompiler, PatchedFBDDLCompiler, PatchedFBTypeCompiler
 from .types import FBCHARCompat, FBVARCHARCompat
 from sqlalchemy import String, DateTime, Time, TIMESTAMP, VARCHAR, CHAR
@@ -187,7 +189,7 @@ class AsyncFDBExecutionContext(FBExecutionContext):
             driver_conn.begin()
 
 
-class AsyncFDBDialect(fdb.FBDialect_fdb):
+class AsyncFDBDialect(FBDialect):
     name = "firebird.fdb_async"
     driver = "fdb_async"
     is_async = True
@@ -196,12 +198,12 @@ class AsyncFDBDialect(fdb.FBDialect_fdb):
     statement_compiler = PatchedFBCompiler
     ddl_compiler = PatchedFBDDLCompiler
     execution_ctx_cls = AsyncFDBExecutionContext
-    ischema_names = fdb.FBDialect_fdb.ischema_names.copy()
+    ischema_names = FBDialect.ischema_names.copy()
     ischema_names["TEXT"] = FBCHARCompat
     ischema_names["VARYING"] = FBVARCHARCompat
     ischema_names["CSTRING"] = FBVARCHARCompat
     
-    colspecs = fdb.FBDialect_fdb.colspecs.copy()
+    colspecs = FBDialect.colspecs.copy()
     colspecs[String] = _FBSafeString
     colspecs[VARCHAR] = _FBSafeString
     colspecs[CHAR] = _FBSafeString
@@ -214,6 +216,26 @@ class AsyncFDBDialect(fdb.FBDialect_fdb):
         super().__init__(*args, **kwargs)
         self.type_compiler_instance = PatchedFBTypeCompiler(self)
         self.type_compiler = self.type_compiler_instance
+
+    def create_connect_args(self, url):
+        opts = url.translate_connect_args(username="user")
+        if opts.get("port"):
+            opts["host"] = "%s/%s" % (opts["host"], opts["port"])
+            del opts["port"]
+        opts.update(url.query)
+
+        util.coerce_kw_type(opts, "type_conv", int)
+
+        return ([], opts)
+
+    def _get_server_version_info(self, connection):
+        dbapi_connection = (
+            connection.connection.dbapi_connection
+            if self.using_sqlalchemy2
+            else connection.connection
+        )
+        minor, major = modf(dbapi_connection.engine_version)
+        return (int(major), int(minor * 10))
 
     def dbapi_exception_translation(self, exception, statement, parameters, context):
         from sqlalchemy import exc
